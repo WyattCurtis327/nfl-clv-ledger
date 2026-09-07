@@ -1,4 +1,4 @@
 season,week,game_id,side,market,book,open_price,bet_price,close_price,open_ts,bet_ts,close_ts,result,notes
-2026,1,KC@LAC_2026-09-06,LAC,ats,consensus,-110,-110,,2026-09-02T12:00:00-07:00,2026-09-03T13:00:00-07:00,,pending,sample pick 1
-2026,1,ARI@NO_2026-09-07,ARI,ats,Splash,-105,-108,,2026-09-02T12:00:00-07:00,2026-09-04T10:00:00-07:00,,pending,sample pick 2
-2026,1,SF@SEA_2026-09-07,SF,ats,Circa,-110,-115,,2026-09-02T12:00:00-07:00,2026-09-05T09:00:00-07:00,,pending,sample pick 3
+2026,1,KC@LAC_2026-09-06,LAC,ats,consensus,-110,-110,-120,2026-09-02T12:00:00-07:00,2026-09-03T13:00:00-07:00,2026-09-06T12:00:00-07:00,win,sample pick 1 — beat close
+2026,1,ARI@NO_2026-09-07,ARI,ats,Splash,-105,-108,-115,2026-09-02T12:00:00-07:00,2026-09-04T10:00:00-07:00,2026-09-07T12:00:00-07:00,loss,sample pick 2
+2026,1,SF@SEA_2026-09-07,SF,ats,Circa,-110,-115,-110,2026-09-02T12:00:00-07:00,2026-09-05T09:00:00-07:00,2026-09-07T12:00:00-07:00,push,sample pick 3 — worse than close

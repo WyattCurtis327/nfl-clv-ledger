@@ -63,7 +63,7 @@ nfl-clv export --week N -o … # CSV for Analytics workspace
 nfl-clv summary              # season cumulative CLV vs W–L
 ```
 
-Default DB path: env `NFL_CLV_DB` (suggested `/workspace/nfl-analytics/clv/ledger.duckdb`).
+Default DB path: `./ledger.duckdb` (cwd-relative), or override with env `NFL_CLV_DB`. On this agent box you can use `NFL_CLV_DB=/workspace/nfl-analytics/clv/ledger.duckdb`.
 
 ## Schema (skill-aligned)
 
@@ -103,6 +103,26 @@ bought cheaper no-vig probability than the fair close (beat the close) — same
 sign as the Concepts glossary above. Process ≠ profitability; never conflate
 CLV with ATS W–L.
 
+## Quick start
+
+Requires **Python 3.11+** (`requires-python` in `pyproject.toml`).
+
+```bash
+git clone https://github.com/WyattCurtis327/nfl-clv-ledger.git
+cd nfl-clv-ledger
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pytest
+export NFL_CLV_DB=./ledger.duckdb
+nfl-clv init
+nfl-clv add --from-csv samples/week1_sample.csv
+nfl-clv grade --week 1
+nfl-clv summary
+nfl-clv export --week 1 -o /tmp/week1.csv
+```
+
+The sample includes `close_price` and graded `result` values so `grade` / `summary` print numeric Season CLV (not `n/a`) and ATS W–L.
+
 ## Install / test
 
 ```bash
@@ -110,6 +130,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
+
 ## License / privacy
 
-Public repo (`WyattCurtis327/nfl-clv-ledger`). No secrets or personal bet history in the tree — keep live ledgers out of git (use `$NFL_CLV_DB` / gitignore).
+MIT — see [`LICENSE`](LICENSE). Public repo (`WyattCurtis327/nfl-clv-ledger`). No secrets or personal bet history in the tree — keep live ledgers out of git (use `$NFL_CLV_DB` / gitignore).

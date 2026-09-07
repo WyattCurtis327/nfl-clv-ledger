@@ -140,7 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db",
         default=None,
-        help="DuckDB path (default: $NFL_CLV_DB or /workspace/nfl-analytics/clv/ledger.duckdb)",
+        help="DuckDB path (default: $NFL_CLV_DB or ./ledger.duckdb)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

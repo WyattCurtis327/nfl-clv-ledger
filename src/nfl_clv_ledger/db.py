@@ -18,7 +18,7 @@ from nfl_clv_ledger.models.schema import (
 )
 from nfl_clv_ledger.odds import compute_clv_if_possible, normalize_american_price
 
-DEFAULT_DB = "/workspace/nfl-analytics/clv/ledger.duckdb"
+DEFAULT_DB = "./ledger.duckdb"
 
 
 def default_db_path() -> Path:

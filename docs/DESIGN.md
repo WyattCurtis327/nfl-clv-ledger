@@ -6,7 +6,7 @@ Append-only DuckDB ledger + CLI so NFL Analytics can report **no-vig closing-lin
 
 ## Storage
 
-Single DuckDB file via `$NFL_CLV_DB` (default `/workspace/nfl-analytics/clv/ledger.duckdb`). Table `ledger` holds one row per intended bet (including explicit `no_bet` weeks).
+Single DuckDB file via `$NFL_CLV_DB` (default `./ledger.duckdb`, cwd-relative). Optional agent-box path: `NFL_CLV_DB=/workspace/nfl-analytics/clv/ledger.duckdb`. Table `ledger` holds one row per intended bet (including explicit `no_bet` weeks).
 
 ## Price convention (ATS v1)
 
