@@ -112,4 +112,4 @@ pytest
 
 ## License / privacy
 
-Private repo (`WyattCurtis327/nfl-clv-ledger`). No secrets in the tree.
+Public repo (`WyattCurtis327/nfl-clv-ledger`). No secrets or personal bet history in the tree — keep live ledgers out of git (use `$NFL_CLV_DB` / gitignore).
