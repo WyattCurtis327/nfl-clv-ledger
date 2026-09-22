@@ -141,13 +141,21 @@ extension (`CREATE SEMANTIC VIEW` + `semantic_view(...)`).
 Keeps **mean no-vig CLV** (`mean_no_vig_clv_pp`) separate from **ATS W–L**
 (`ats_wins` / `ats_losses` / `ats_win_rate`). `AVG(no_vig_clv_pp)` skips NULLs.
 
+Two equivalent ways to define `nfl_ats_process`:
+
+| Path | Source of truth | Command |
+|------|-----------------|---------|
+| **SQL DDL** (reference) | `examples/semantic_views_proto.sql` | `python scripts/run_semantic_views_proto.py` |
+| **YAML** (checked-in) | `metrics/nfl_ats_process.yaml` | `python scripts/run_semantic_views_proto.py --from-yaml` |
+
 ### Run in <5 minutes
 
 ```bash
 # from repo root, with the project venv active (DuckDB >= 1.0; verified on 1.5.5)
 export NFL_CLV_DB=./ledger.duckdb   # or your live path
 # if empty: nfl-clv init && nfl-clv add --from-csv samples/week1_sample.csv
-python scripts/run_semantic_views_proto.py
+python scripts/run_semantic_views_proto.py              # SQL DDL
+python scripts/run_semantic_views_proto.py --from-yaml  # YAML → CREATE … FROM YAML
 ```
 
 Or run the SQL directly in the DuckDB CLI / Python:
@@ -157,8 +165,36 @@ Or run the SQL directly in the DuckDB CLI / Python:
 duckdb "$NFL_CLV_DB" < examples/semantic_views_proto.sql
 ```
 
-Files: `examples/semantic_views_proto.sql`, `scripts/run_semantic_views_proto.py`.
-Docs: https://duckdb.org/community_extensions/extensions/semantic_views
+### YAML schema quirks (extension-native)
+
+The extension accepts **only** dollar-quoted YAML literals:
+
+```sql
+CREATE OR REPLACE SEMANTIC VIEW nfl_ats_process FROM YAML $$
+...yaml body...
+$$;
+```
+
+File paths / bind parameters are **not** accepted (`FROM YAML` expects `$`). The runner
+reads `metrics/nfl_ats_process.yaml` and embeds it. Round-trip via
+`read_yaml_from_semantic_view('nfl_ats_process')`.
+
+Required fields (not the same as research MetricFlow-style catalogs):
+
+- `tables[]`: `alias`, `table`, `pk_columns`
+- `dimensions[]`: `name`, `expr`, **`source_table`** (required — alias of the table)
+- `metrics[]`: `name`, `expr`; **`source_table`** for table-bound metrics; omit for
+  derived metrics (e.g. `ats_win_rate`)
+- Optional: `joins[]`, `facts[]`, `output_type`
+
+Illustrative research YAML under `/workspace/research/nfl-semantic-layer-guide/` uses a
+different shape (`data_type` / `format` / filters without `alias`/`source_table`) and is
+**docs-only** — do not copy it verbatim into this repo.
+
+Files: `metrics/nfl_ats_process.yaml`, `examples/semantic_views_proto.sql`,
+`scripts/run_semantic_views_proto.py`.
+Docs: https://duckdb.org/community_extensions/extensions/semantic_views ·
+https://anentropic.github.io/duckdb-semantic-views/
 
 ## License / privacy
 

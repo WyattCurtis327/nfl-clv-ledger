@@ -1,0 +1,62 @@
+# DuckDB semantic_views YAML for nfl_ats_process
+# Schema: extension-native (CREATE SEMANTIC VIEW … FROM YAML $$…$$)
+# Docs: https://duckdb.org/community_extensions/extensions/semantic_views
+#       https://anentropic.github.io/duckdb-semantic-views/
+#
+# Required shape (differs from research MetricFlow-style catalogs):
+#   tables[]:     alias, table, pk_columns
+#   dimensions[]: name, expr, source_table   (source_table is required)
+#   metrics[]:    name, expr, source_table   (omit / null source_table for derived metrics)
+# Optional: joins[], facts[], output_type
+#
+# CLV ≠ ATS W–L. Does not modify fact rows in `ledger`.
+
+tables:
+  - alias: l
+    table: ledger
+    pk_columns:
+      - id
+
+dimensions:
+  - name: season
+    expr: l.season
+    source_table: l
+  - name: week
+    expr: l.week
+    source_table: l
+  - name: book
+    expr: l.book
+    source_table: l
+  - name: market
+    expr: l.market
+    source_table: l
+  - name: side
+    expr: l.side
+    source_table: l
+  - name: result
+    expr: l.result
+    source_table: l
+
+metrics:
+  # Process: pick volume
+  - name: pick_count
+    expr: COUNT(*)
+    source_table: l
+  # Process: mean no-vig CLV in probability points (AVG skips NULLs)
+  - name: mean_no_vig_clv_pp
+    expr: AVG(l.no_vig_clv_pp)
+    source_table: l
+  # Outcome: ATS W–L kept separate from CLV
+  - name: ats_wins
+    expr: "COUNT(*) FILTER (WHERE l.result = 'win')"
+    source_table: l
+  - name: ats_losses
+    expr: "COUNT(*) FILTER (WHERE l.result = 'loss')"
+    source_table: l
+  # Derived metric (no source_table): win rate over graded win/loss only
+  - name: ats_win_rate
+    expr: ats_wins * 1.0 / NULLIF(ats_wins + ats_losses, 0)
+  # Optional process share (from research catalog intent)
+  - name: positive_clv_share
+    expr: "AVG(CASE WHEN l.no_vig_clv_pp > 0 THEN 1.0 ELSE 0.0 END)"
+    source_table: l
