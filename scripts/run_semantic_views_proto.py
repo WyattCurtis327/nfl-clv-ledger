@@ -2,18 +2,21 @@
 """Smoke-run DuckDB semantic_views over the CLV ledger.
 
 Opens NFL_CLV_DB (else ./ledger.duckdb), INSTALL/LOAD semantic_views,
-CREATE OR REPLACE SEMANTIC VIEW nfl_ats_process, prints three demo tables.
+CREATE OR REPLACE SEMANTIC VIEW nfl_ats_process (SQL DDL or YAML),
+prints three demo tables.
 
 Fails loudly if the community extension will not load.
 Does not drop or rewrite fact rows in `ledger`.
 
 Usage:
   export NFL_CLV_DB=/path/to/ledger.duckdb   # optional
-  python scripts/run_semantic_views_proto.py
+  python scripts/run_semantic_views_proto.py              # SQL DDL (default)
+  python scripts/run_semantic_views_proto.py --from-yaml   # metrics YAML
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -26,6 +29,7 @@ except ImportError as exc:  # pragma: no cover
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SQL_PATH = REPO_ROOT / "examples" / "semantic_views_proto.sql"
+YAML_PATH = REPO_ROOT / "metrics" / "nfl_ats_process.yaml"
 
 DDL = """
 CREATE OR REPLACE SEMANTIC VIEW nfl_ats_process AS
@@ -106,6 +110,22 @@ def load_extension(con: duckdb.DuckDBPyConnection) -> None:
         raise SystemExit(2) from exc
 
 
+def create_from_yaml(con: duckdb.DuckDBPyConnection, yaml_path: Path) -> None:
+    """CREATE OR REPLACE SEMANTIC VIEW from extension-native YAML.
+
+    The extension only accepts dollar-quoted YAML literals
+    (`CREATE … FROM YAML $$…$$`), not file paths or bind parameters.
+    """
+    text = yaml_path.read_text(encoding="utf-8")
+    # Pick a dollar-quote tag that cannot appear in the file body.
+    tag = "svyaml"
+    while f"${tag}$" in text:
+        tag += "x"
+    con.execute(
+        f"CREATE OR REPLACE SEMANTIC VIEW nfl_ats_process FROM YAML ${tag}${text}${tag}$"
+    )
+
+
 def print_relation(title: str, con: duckdb.DuckDBPyConnection, sql: str) -> None:
     rel = con.execute(sql)
     cols = [d[0] for d in rel.description]
@@ -125,7 +145,30 @@ def print_relation(title: str, con: duckdb.DuckDBPyConnection, sql: str) -> None
         print("(no rows)")
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Run DuckDB semantic_views demos over the CLV ledger."
+    )
+    p.add_argument(
+        "--from-yaml",
+        action="store_true",
+        help=f"Create nfl_ats_process from {YAML_PATH.relative_to(REPO_ROOT)} "
+        "(default: embedded SQL DDL matching examples/semantic_views_proto.sql)",
+    )
+    p.add_argument(
+        "--yaml",
+        type=Path,
+        default=None,
+        help="Override YAML path (implies --from-yaml)",
+    )
+    return p.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    from_yaml = args.from_yaml or args.yaml is not None
+    yaml_path = (args.yaml or YAML_PATH).expanduser().resolve()
+
     db = resolve_db()
     if not db.is_file():
         print(
@@ -135,9 +178,15 @@ def main() -> int:
         )
         return 1
 
+    if from_yaml and not yaml_path.is_file():
+        print(f"ERROR: YAML not found: {yaml_path}", file=sys.stderr)
+        return 1
+
     print(f"DuckDB version: {duckdb.__version__}")
     print(f"Database:       {db}")
     print(f"SQL example:    {SQL_PATH}")
+    if from_yaml:
+        print(f"YAML source:    {yaml_path}")
 
     # Writable connection required for CREATE SEMANTIC VIEW (queries alone can be read-only).
     con = duckdb.connect(str(db))
@@ -150,8 +199,12 @@ def main() -> int:
         ).fetchone()
         print(f"Extension:      {ext}")
 
-        con.execute(DDL)
-        print("Semantic view: nfl_ats_process (CREATE OR REPLACE OK)")
+        if from_yaml:
+            create_from_yaml(con, yaml_path)
+            print("Semantic view: nfl_ats_process (CREATE OR REPLACE FROM YAML OK)")
+        else:
+            con.execute(DDL)
+            print("Semantic view: nfl_ats_process (CREATE OR REPLACE OK)")
 
         for title, sql in DEMOS:
             print_relation(title, con, sql)
@@ -162,6 +215,11 @@ def main() -> int:
             "  - ats_win_rate = ats_wins / (ats_wins + ats_losses); excludes push/pending/no_bet.\n"
             "  - Fact table `ledger` rows were not modified."
         )
+        if from_yaml:
+            print(
+                "  - YAML path uses extension-native schema "
+                "(alias/table/pk_columns + source_table on dims/metrics)."
+            )
     finally:
         con.close()
     return 0
