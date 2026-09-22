@@ -131,6 +131,35 @@ pytest
 ```
 
 
+
+## DuckDB semantic views prototype
+
+Spike of Databricks-like **Metric Views** on the local ledger using the community
+[`semantic_views`](https://duckdb.org/community_extensions/extensions/semantic_views)
+extension (`CREATE SEMANTIC VIEW` + `semantic_view(...)`).
+
+Keeps **mean no-vig CLV** (`mean_no_vig_clv_pp`) separate from **ATS W–L**
+(`ats_wins` / `ats_losses` / `ats_win_rate`). `AVG(no_vig_clv_pp)` skips NULLs.
+
+### Run in <5 minutes
+
+```bash
+# from repo root, with the project venv active (DuckDB >= 1.0; verified on 1.5.5)
+export NFL_CLV_DB=./ledger.duckdb   # or your live path
+# if empty: nfl-clv init && nfl-clv add --from-csv samples/week1_sample.csv
+python scripts/run_semantic_views_proto.py
+```
+
+Or run the SQL directly in the DuckDB CLI / Python:
+
+```bash
+# after INSTALL/LOAD (see examples/semantic_views_proto.sql)
+duckdb "$NFL_CLV_DB" < examples/semantic_views_proto.sql
+```
+
+Files: `examples/semantic_views_proto.sql`, `scripts/run_semantic_views_proto.py`.
+Docs: https://duckdb.org/community_extensions/extensions/semantic_views
+
 ## License / privacy
 
 MIT — see [`LICENSE`](LICENSE). Public repo (`WyattCurtis327/nfl-clv-ledger`). No secrets or personal bet history in the tree — keep live ledgers out of git (use `$NFL_CLV_DB` / gitignore).
