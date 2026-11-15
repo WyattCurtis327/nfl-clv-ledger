@@ -17,11 +17,23 @@ CREATE TABLE IF NOT EXISTS ledger (
     open_ts VARCHAR,
     bet_ts VARCHAR,
     close_ts VARCHAR,
+    bet_spread DOUBLE,
+    close_spread DOUBLE,
+    point_move DOUBLE,
     no_vig_clv_pp DOUBLE,
+    clv_adj_pp DOUBLE,
     result VARCHAR NOT NULL DEFAULT 'pending',
     notes VARCHAR
 );
 """
+
+# Idempotent ALTERs for ledgers created before point-adjusted CLV.
+MIGRATE_COLUMNS_SQL = [
+    "ALTER TABLE ledger ADD COLUMN IF NOT EXISTS bet_spread DOUBLE",
+    "ALTER TABLE ledger ADD COLUMN IF NOT EXISTS close_spread DOUBLE",
+    "ALTER TABLE ledger ADD COLUMN IF NOT EXISTS point_move DOUBLE",
+    "ALTER TABLE ledger ADD COLUMN IF NOT EXISTS clv_adj_pp DOUBLE",
+]
 
 LEDGER_COLUMNS = [
     "season",
@@ -36,7 +48,11 @@ LEDGER_COLUMNS = [
     "open_ts",
     "bet_ts",
     "close_ts",
+    "bet_spread",
+    "close_spread",
+    "point_move",
     "no_vig_clv_pp",
+    "clv_adj_pp",
     "result",
     "notes",
 ]
@@ -50,7 +66,11 @@ SKILL_EXPORT_COLUMNS = [
     "open_price",
     "bet_price",
     "close_price",
+    "bet_spread",
+    "close_spread",
+    "point_move",
     "no_vig_clv_pp",
+    "clv_adj_pp",
     "result",
     "notes",
 ]

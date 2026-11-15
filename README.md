@@ -56,20 +56,23 @@ If Analytics looked at a slate and took **zero** plays, log an explicit no-bet r
 
 ```bash
 nfl-clv init                 # create DB + schema
-nfl-clv add …                # log a pick (or --from-csv)
-nfl-clv set-close …          # fill closes / Monday catch-up
+nfl-clv migrate              # add point-CLV columns on an existing ledger (idempotent)
+nfl-clv add …                # log a pick (or --from-csv); optional --bet-spread / --close-spread
+nfl-clv set-close …          # fill closes / Monday catch-up; optional --close-spread
 nfl-clv grade --week N       # week + season CLV and ATS W–L (separate)
-nfl-clv export --week N -o … # CSV for Analytics workspace
-nfl-clv summary              # season cumulative CLV vs W–L
+nfl-clv export --week N -o … # CSV for Analytics (includes spreads / adjusted CLV)
+nfl-clv summary              # season price-only CLV, adjusted CLV, point move, W–L
 ```
 
 Default DB path: `./ledger.duckdb` (cwd-relative), or override with env `NFL_CLV_DB`. On this agent box you can use `NFL_CLV_DB=/workspace/nfl-analytics/clv/ledger.duckdb`.
 
 ## Schema (skill-aligned)
 
-`season | week | game_id | side | market | book | open_price | bet_price | close_price | open_ts | bet_ts | close_ts | no_vig_clv_pp | result | notes`
+`season | week | game_id | side | market | book | open_price | bet_price | close_price | open_ts | bet_ts | close_ts | bet_spread | close_spread | point_move | no_vig_clv_pp | clv_adj_pp | result | notes`
 
 `market`: `ats` | `ml`. `result`: win / loss / push / pending / no_bet.
+
+`bet_spread` and `close_spread` are signed from **our side’s** perspective (we bet −10.5 → `bet_spread = −10.5`; we bet a dog at +7.5 → `+7.5`). They are nullable; existing rows stay intact after `nfl-clv migrate`.
 
 ## Math notes (v1)
 
@@ -101,7 +104,99 @@ no_vig_clv_pp = 100 × (close_no_vig_prob − bet_no_vig_prob)
 Units are **probability points** (not raw juice ticks). **Positive** means you
 bought cheaper no-vig probability than the fair close (beat the close) — same
 sign as the Concepts glossary above. Process ≠ profitability; never conflate
-CLV with ATS W–L.
+CLV with ATS W–L. This juice-only number is **unchanged** when spreads are
+logged; spread moves go into `clv_adj_pp` instead.
+
+### Signed spreads and `point_move`
+
+Spreads are stored from our side’s perspective. `point_move` is **bet minus close**,
+so it is positive when we beat the number:
+
+```text
+point_move = bet_spread − close_spread
+```
+
+Example: we bet −10.5 and it closed −13.5 → `point_move = +3`. (A raw
+“close minus bet” would be −3 and would not match “positive when we beat the
+number.”)
+
+### Key-number push-probability table
+
+A simple NFL table of `P(final margin = n)` in probability points
+(`100 × P(n)`). Heavier weight on **3, 7, 6, 10, 14**. Integers not listed use
+`DEFAULT_PUSH_PP = 0.4`.
+
+```text
+n     pp
+0     0.3
+1     3.3
+2     3.5
+3    15.0
+4     5.2
+5     3.1
+6     6.4
+7     9.4
+8     3.2
+9     2.1
+10    6.2
+11    2.0
+12    1.5
+13    2.4
+14    5.4
+15    1.3
+16    1.6
+17    3.5
+18    1.0
+19    0.8
+20    2.0
+21    2.8
+22    0.6
+23    0.7
+24    2.0
+25    0.5
+26    0.6
+27    1.2
+28    1.5
+```
+
+This is a documented conversion, not a book model, and it is not a claim of
+profitability.
+
+### Point-value term and `clv_adj_pp`
+
+Walk every **0.5-point step** from `bet_spread` to `close_spread`. For each
+step, the key integer `n` is the integer endpoint of that step (one end is
+always an integer). The step contributes `P(n) / 2`. Summing both half-steps
+around `n` (win→push and push→loss) equals `P(n)` once — the change in
+cover probability, which is the same unit as `no_vig_clv_pp`. The sign of the
+sum follows `point_move`.
+
+```text
+point_value_pp = sign(point_move) × Σ  (P(n) / 2)  over each 0.5 step
+clv_adj_pp     = no_vig_clv_pp + point_value_pp
+```
+
+Worked example: bet −10.5, close −13.5. Steps cross keys 11, 11, 12, 12, 13, 13
+→ `point_value_pp = 2.0 + 1.5 + 2.4 = +5.9`. If the juices also moved from
+−110 to −120 (`no_vig_clv_pp ≈ +1.012146`), then
+`clv_adj_pp ≈ +6.912146`.
+
+Crossing the 3: bet −3.0, close −3.5 → one half-step → `+15.0 / 2 = +7.5`.
+
+### Null policy
+
+`point_move` is NULL unless both spreads are present. `clv_adj_pp` is NULL
+unless both spreads **and** `no_vig_clv_pp` are present. Missing spreads do
+**not** silently fall back to price-only CLV; averaging a mix of adjusted and
+price-only rows would be misleading. `summary` reports price-only CLV (mean
+`no_vig_clv_pp`), adjusted CLV (mean of non-null `clv_adj_pp`), average
+`point_move`, and the percent of non-null `point_move` rows that are
+positive (zeros do not count as beating the close) as **separate lines** from
+ATS W–L.
+
+Existing ledgers: run `nfl-clv migrate` (or any command; `connect()` applies
+the same idempotent `ADD COLUMN IF NOT EXISTS`). New columns are NULL until
+you backfill spreads; `no_vig_clv_pp` is not rewritten.
 
 ## Quick start
 

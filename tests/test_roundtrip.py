@@ -69,7 +69,13 @@ def test_roundtrip_add_set_close_grade_export(tmp_path: Path):
         season_stats = db.season_summary(con, season=2026)
         summary_lines = db.format_summary_lines(season_stats)
         assert summary_lines[0].startswith("Season CLV")
-        assert summary_lines[1].startswith("ATS W-L")
+        assert any(ln.startswith("Season adjusted CLV") for ln in summary_lines)
+        assert any(ln.startswith("Avg point move") for ln in summary_lines)
+        assert any(ln.startswith("Beat close (points)") for ln in summary_lines)
+        assert any(ln.startswith("ATS W-L") for ln in summary_lines)
+        clv_line = next(ln for ln in summary_lines if ln.startswith("Season CLV"))
+        wl_line = next(ln for ln in summary_lines if ln.startswith("ATS W-L"))
+        assert clv_line != wl_line
     finally:
         con.close()
 

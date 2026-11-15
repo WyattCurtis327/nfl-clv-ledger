@@ -12,11 +12,17 @@ import duckdb
 from nfl_clv_ledger.models.schema import (
     LEDGER_COLUMNS,
     MARKET_VALUES,
+    MIGRATE_COLUMNS_SQL,
     RESULT_VALUES,
     SCHEMA_SQL,
     SKILL_EXPORT_COLUMNS,
 )
-from nfl_clv_ledger.odds import compute_clv_if_possible, normalize_american_price
+from nfl_clv_ledger.odds import (
+    compute_clv_adj_pp,
+    compute_clv_if_possible,
+    compute_point_move,
+    normalize_american_price,
+)
 
 DEFAULT_DB = "./ledger.duckdb"
 
@@ -25,11 +31,21 @@ def default_db_path() -> Path:
     return Path(os.environ.get("NFL_CLV_DB", DEFAULT_DB))
 
 
+def migrate_ledger(con: duckdb.DuckDBPyConnection) -> None:
+    """Idempotent schema migration: add point-CLV columns, keep existing rows.
+
+    Does not recompute or rewrite no_vig_clv_pp.
+    """
+    for stmt in MIGRATE_COLUMNS_SQL:
+        con.execute(stmt)
+
+
 def connect(db_path: Optional[Path | str] = None) -> duckdb.DuckDBPyConnection:
     path = Path(db_path) if db_path is not None else default_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(path))
     con.execute(SCHEMA_SQL)
+    migrate_ledger(con)
     return con
 
 
@@ -59,6 +75,25 @@ def _validate_market(market: str) -> str:
     return m
 
 
+def _normalize_optional_spread(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _clv_fields(
+    bet_price: Optional[float],
+    close_price: Optional[float],
+    bet_spread: Optional[float],
+    close_spread: Optional[float],
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Return (no_vig_clv_pp, point_move, clv_adj_pp)."""
+    clv = compute_clv_if_possible(bet_price, close_price)
+    move = compute_point_move(bet_spread, close_spread)
+    adj = compute_clv_adj_pp(bet_price, close_price, bet_spread, close_spread)
+    return clv, move, adj
+
+
 def add_row(
     con: duckdb.DuckDBPyConnection,
     *,
@@ -74,6 +109,8 @@ def add_row(
     open_ts: Optional[str] = None,
     bet_ts: Optional[str] = None,
     close_ts: Optional[str] = None,
+    bet_spread: Optional[float] = None,
+    close_spread: Optional[float] = None,
     result: str = "pending",
     notes: Optional[str] = None,
 ) -> int:
@@ -96,7 +133,9 @@ def add_row(
     if close_price is not None and close_p is None:
         close_p = -110.0
 
-    clv = compute_clv_if_possible(bet_p, close_p)
+    bet_s = _normalize_optional_spread(bet_spread)
+    close_s = _normalize_optional_spread(close_spread)
+    clv, move, adj = _clv_fields(bet_p, close_p, bet_s, close_s)
     row_id = _next_id(con)
     con.execute(
         """
@@ -104,8 +143,9 @@ def add_row(
             id, season, week, game_id, side, market, book,
             open_price, bet_price, close_price,
             open_ts, bet_ts, close_ts,
-            no_vig_clv_pp, result, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            bet_spread, close_spread, point_move,
+            no_vig_clv_pp, clv_adj_pp, result, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             row_id,
@@ -121,7 +161,11 @@ def add_row(
             open_ts,
             bet_ts,
             close_ts,
+            bet_s,
+            close_s,
+            move,
             clv,
+            adj,
             result,
             notes,
         ],
@@ -169,6 +213,8 @@ def add_from_csv(
                 open_ts=row.get("open_ts") or None,
                 bet_ts=row.get("bet_ts") or None,
                 close_ts=row.get("close_ts") or None,
+                bet_spread=_f("bet_spread"),
+                close_spread=_f("close_spread"),
                 result=row.get("result") or "pending",
                 notes=row.get("notes") or None,
             )
@@ -185,6 +231,7 @@ def set_close(
     side: str,
     close_price: float,
     close_ts: Optional[str] = None,
+    close_spread: Optional[float] = None,
     market: Optional[str] = None,
 ) -> int:
     """Fill close price (and recompute CLV) for matching row(s). Returns rows updated."""
@@ -199,19 +246,27 @@ def set_close(
         params.append(_validate_market(market))
 
     rows = con.execute(
-        f"SELECT id, bet_price FROM ledger WHERE {where}",
+        f"SELECT id, bet_price, bet_spread, close_spread FROM ledger WHERE {where}",
         params,
     ).fetchall()
     updated = 0
-    for row_id, bet_price in rows:
-        clv = compute_clv_if_possible(bet_price, close_p)
+    for row_id, bet_price, bet_spread, existing_close_spread in rows:
+        stored_close_spread = (
+            float(close_spread) if close_spread is not None else existing_close_spread
+        )
+        clv, move, adj = _clv_fields(bet_price, close_p, bet_spread, stored_close_spread)
         con.execute(
             """
             UPDATE ledger
-            SET close_price = ?, close_ts = COALESCE(?, close_ts), no_vig_clv_pp = ?
+            SET close_price = ?,
+                close_ts = COALESCE(?, close_ts),
+                close_spread = ?,
+                no_vig_clv_pp = ?,
+                point_move = ?,
+                clv_adj_pp = ?
             WHERE id = ?
             """,
-            [close_p, close_ts, clv, row_id],
+            [close_p, close_ts, stored_close_spread, clv, move, adj, row_id],
         )
         updated += 1
     return updated
@@ -260,19 +315,25 @@ def grade_week(
                 market=item.get("market"),
             )
 
-    # Recompute CLV for any rows that have bet+close but null clv
-    pending_clv = con.execute(
+    # Recompute price CLV, point move, and adjusted CLV from stored inputs.
+    pending = con.execute(
         """
-        SELECT id, bet_price, close_price FROM ledger
+        SELECT id, bet_price, close_price, bet_spread, close_spread FROM ledger
         WHERE week = ?
           AND (? IS NULL OR season = ?)
-          AND bet_price IS NOT NULL AND close_price IS NOT NULL
         """,
         [week, season, season],
     ).fetchall()
-    for row_id, bet_price, close_price in pending_clv:
-        clv = compute_clv_if_possible(bet_price, close_price)
-        con.execute("UPDATE ledger SET no_vig_clv_pp = ? WHERE id = ?", [clv, row_id])
+    for row_id, bet_price, close_price, bet_spread, close_spread in pending:
+        clv, move, adj = _clv_fields(bet_price, close_price, bet_spread, close_spread)
+        con.execute(
+            """
+            UPDATE ledger
+            SET no_vig_clv_pp = ?, point_move = ?, clv_adj_pp = ?
+            WHERE id = ?
+            """,
+            [clv, move, adj, row_id],
+        )
 
     return {
         "week": week_summary(con, week=week, season=season),
@@ -288,7 +349,7 @@ def week_summary(
 ) -> dict[str, Any]:
     rows = con.execute(
         """
-        SELECT no_vig_clv_pp, result, market FROM ledger
+        SELECT no_vig_clv_pp, clv_adj_pp, point_move, result, market FROM ledger
         WHERE week = ? AND (? IS NULL OR season = ?)
         """,
         [week, season, season],
@@ -303,7 +364,7 @@ def season_summary(
 ) -> dict[str, Any]:
     rows = con.execute(
         """
-        SELECT no_vig_clv_pp, result, market FROM ledger
+        SELECT no_vig_clv_pp, clv_adj_pp, point_move, result, market FROM ledger
         WHERE (? IS NULL OR season = ?)
         """,
         [season, season],
@@ -313,17 +374,27 @@ def season_summary(
 
 def _summarize(rows: list[tuple], *, label: str) -> dict[str, Any]:
     clvs = [r[0] for r in rows if r[0] is not None]
-    ats = [r for r in rows if (r[2] or "ats") == "ats" and r[1] in ("win", "loss", "push")]
-    wins = sum(1 for r in ats if r[1] == "win")
-    losses = sum(1 for r in ats if r[1] == "loss")
-    pushes = sum(1 for r in ats if r[1] == "push")
+    adjs = [r[1] for r in rows if r[1] is not None]
+    moves = [r[2] for r in rows if r[2] is not None]
+    ats = [r for r in rows if (r[4] or "ats") == "ats" and r[3] in ("win", "loss", "push")]
+    wins = sum(1 for r in ats if r[3] == "win")
+    losses = sum(1 for r in ats if r[3] == "loss")
+    pushes = sum(1 for r in ats if r[3] == "push")
     mean_clv = sum(clvs) / len(clvs) if clvs else None
+    mean_adj = sum(adjs) / len(adjs) if adjs else None
+    mean_move = sum(moves) / len(moves) if moves else None
+    pct_beat = (100.0 * sum(1 for m in moves if m > 0) / len(moves)) if moves else None
     return {
         "label": label,
         "n_rows": len(rows),
         "n_clv": len(clvs),
+        "n_clv_adj": len(adjs),
+        "n_point_move": len(moves),
         "mean_clv_pp": round(mean_clv, 4) if mean_clv is not None else None,
         "sum_clv_pp": round(sum(clvs), 4) if clvs else None,
+        "mean_clv_adj_pp": round(mean_adj, 4) if mean_adj is not None else None,
+        "mean_point_move": round(mean_move, 4) if mean_move is not None else None,
+        "pct_beat_close": round(pct_beat, 1) if pct_beat is not None else None,
         "ats_wins": wins,
         "ats_losses": losses,
         "ats_pushes": pushes,
@@ -331,20 +402,33 @@ def _summarize(rows: list[tuple], *, label: str) -> dict[str, Any]:
     }
 
 
+def _fmt_pp(value: Optional[float]) -> str:
+    return f"{value:+.4f} pp" if value is not None else "n/a"
+
+
+def _fmt_move(value: Optional[float]) -> str:
+    return f"{value:+.2f}" if value is not None else "n/a"
+
+
+def _fmt_pct(value: Optional[float]) -> str:
+    return f"{value:.1f}%" if value is not None else "n/a"
+
+
 def format_summary_lines(summary: dict[str, Any], *, season_stats: Optional[dict[str, Any]] = None) -> list[str]:
     """Human-readable lines. Season CLV and ATS W-L are ALWAYS separate lines."""
     lines: list[str] = []
-    target = season_stats or summary
-    clv = target.get("mean_clv_pp")
-    clv_s = f"{clv:+.4f} pp" if clv is not None else "n/a"
-    # Separate lines — never conflate
-    lines.append(f"Season CLV (mean no-vig): {clv_s}")
-    lines.append(f"ATS W-L: {target.get('ats_record', '0-0-0')}")
     if summary is not season_stats and summary.get("label", "").startswith("week"):
-        wclv = summary.get("mean_clv_pp")
-        wclv_s = f"{wclv:+.4f} pp" if wclv is not None else "n/a"
-        lines.insert(0, f"Week CLV (mean no-vig): {wclv_s}")
-        lines.insert(1, f"Week ATS W-L: {summary.get('ats_record', '0-0-0')}")
+        lines.append(f"Week CLV (mean no-vig): {_fmt_pp(summary.get('mean_clv_pp'))}")
+        lines.append(f"Week adjusted CLV (mean clv_adj_pp): {_fmt_pp(summary.get('mean_clv_adj_pp'))}")
+        lines.append(f"Week avg point move: {_fmt_move(summary.get('mean_point_move'))}")
+        lines.append(f"Week beat close (points): {_fmt_pct(summary.get('pct_beat_close'))}")
+        lines.append(f"Week ATS W-L: {summary.get('ats_record', '0-0-0')}")
+    target = season_stats or summary
+    lines.append(f"Season CLV (mean no-vig): {_fmt_pp(target.get('mean_clv_pp'))}")
+    lines.append(f"Season adjusted CLV (mean clv_adj_pp): {_fmt_pp(target.get('mean_clv_adj_pp'))}")
+    lines.append(f"Avg point move: {_fmt_move(target.get('mean_point_move'))}")
+    lines.append(f"Beat close (points): {_fmt_pct(target.get('pct_beat_close'))}")
+    lines.append(f"ATS W-L: {target.get('ats_record', '0-0-0')}")
     return lines
 
 
