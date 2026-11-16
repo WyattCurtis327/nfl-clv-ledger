@@ -23,6 +23,17 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_migrate(args: argparse.Namespace) -> int:
+    path = _db_path(args) or db.default_db_path()
+    con = db.connect(path)
+    try:
+        db.migrate_ledger(con)
+        print(f"migrated ledger at {path}")
+        return 0
+    finally:
+        con.close()
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     con = db.connect(_db_path(args))
     try:
@@ -50,6 +61,8 @@ def cmd_add(args: argparse.Namespace) -> int:
             open_ts=args.open_ts,
             bet_ts=args.bet_ts,
             close_ts=args.close_ts,
+            bet_spread=args.bet_spread,
+            close_spread=args.close_spread,
             result=args.result,
             notes=args.notes,
         )
@@ -76,6 +89,7 @@ def cmd_set_close(args: argparse.Namespace) -> int:
             side=args.side,
             close_price=args.close_price,
             close_ts=args.close_ts,
+            close_spread=args.close_spread,
             market=args.market,
         )
         print(f"updated close on {n} row(s)")
@@ -147,6 +161,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_init = sub.add_parser("init", help="Create DB + schema")
     p_init.set_defaults(func=cmd_init)
 
+    p_mig = sub.add_parser("migrate", help="Add point-CLV columns to an existing ledger (idempotent)")
+    p_mig.set_defaults(func=cmd_migrate)
+
     p_add = sub.add_parser("add", help="Log a pick or import CSV")
     p_add.add_argument("--season", type=int, default=None)
     p_add.add_argument("--week", type=int, default=None)
@@ -160,6 +177,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("--open-ts", dest="open_ts", default=None)
     p_add.add_argument("--bet-ts", dest="bet_ts", default=None)
     p_add.add_argument("--close-ts", dest="close_ts", default=None)
+    p_add.add_argument(
+        "--bet-spread",
+        dest="bet_spread",
+        type=float,
+        default=None,
+        help="Signed spread from our side (e.g. -10.5 or +7.5)",
+    )
+    p_add.add_argument(
+        "--close-spread",
+        dest="close_spread",
+        type=float,
+        default=None,
+        help="Signed closing spread from our side",
+    )
     p_add.add_argument("--result", default="pending")
     p_add.add_argument("--notes", default=None)
     p_add.add_argument("--from-csv", dest="from_csv", default=None)
@@ -172,6 +203,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_close.add_argument("--side", required=True)
     p_close.add_argument("--close-price", dest="close_price", type=float, required=True)
     p_close.add_argument("--close-ts", dest="close_ts", default=None)
+    p_close.add_argument(
+        "--close-spread",
+        dest="close_spread",
+        type=float,
+        default=None,
+        help="Signed closing spread from our side (optional; leaves existing value if omitted)",
+    )
     p_close.add_argument("--market", default=None, choices=["ats", "ml"])
     p_close.set_defaults(func=cmd_set_close)
 
